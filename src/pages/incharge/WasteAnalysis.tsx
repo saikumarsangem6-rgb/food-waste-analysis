@@ -8,7 +8,6 @@ import {
   FileVideo, FileImage
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { GoogleGenAI } from "@google/genai";
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, 
   Tooltip, ResponsiveContainer, Cell
@@ -89,56 +88,22 @@ export default function WasteAnalysis() {
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
-
-    if (file.type.startsWith('image/')) {
-      setMediaType('image');
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const base64 = event.target?.result as string;
-        setCapturedImage(base64);
-        analyzeImage(base64);
-      };
-      reader.readAsDataURL(file);
-    } else if (file.type.startsWith('video/')) {
-      setMediaType('video');
-      simulateVideoAnalysis();
-    } else {
-      setError("Please upload an image or video file.");
-    }
-  };
-
-  const resetToCamera = () => {
-    setPreviewUrl(null);
-    setCapturedImage(null);
-    setAnalysis(null);
-    setMediaType('camera');
-  };
-
   const startRecording = () => {
-    if (videoRef.current && videoRef.current.srcObject && mediaType === 'camera') {
+    if (videoRef.current) {
       const stream = videoRef.current.srcObject as MediaStream;
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          setRecordedChunks(prev => [...prev, event.data]);
-        }
-      };
-
-      mediaRecorder.onstop = () => {
-        simulateVideoAnalysis();
-      };
-
-      mediaRecorder.start();
-      setIsRecording(true);
-      setRecordedChunks([]);
+      if (stream) {
+        const mediaRecorder = new MediaRecorder(stream);
+        mediaRecorderRef.current = mediaRecorder;
+        const chunks: Blob[] = [];
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) {
+            chunks.push(e.data);
+            setRecordedChunks(chunks);
+          }
+        };
+        mediaRecorder.start();
+        setIsRecording(true);
+      }
     }
   };
 
@@ -149,58 +114,75 @@ export default function WasteAnalysis() {
     }
   };
 
-  const simulateVideoAnalysis = () => {
-    setLoading(true);
+  const resetToCamera = () => {
+    setCapturedImage(null);
+    setPreviewUrl(null);
     setAnalysis(null);
-    setTimeout(() => {
-      setAnalysis({
-        item: "Rice",
-        confidence: 92,
-        estimatedWeight: "12.5kg",
-        reason: "Observed high volume of unconsumed rice in the disposal bins during the recording period."
-      });
-      setLoading(false);
-    }, 2000);
+    setError(null);
+    setMediaType('camera');
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          setCapturedImage(result);
+          setPreviewUrl(result);
+          setMediaType('image');
+          analyzeImage(result);
+        };
+        reader.readAsDataURL(file);
+      } else if (file.type.startsWith('video/')) {
+        const url = URL.createObjectURL(file);
+        setPreviewUrl(url);
+        setMediaType('video');
+      }
+    }
   };
 
   const analyzeImage = async (base64Image: string) => {
     setLoading(true);
     setError(null);
     setAnalysis(null);
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-      const model = ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: [
-          {
-            parts: [
-              { text: "Analyze this image of food waste. Identify the most wasted item and estimate its quantity. Return the result in JSON format with keys: 'item', 'confidence' (0-100), 'estimatedWeight', and 'reason'." },
-              {
-                inlineData: {
-                  mimeType: "image/jpeg",
-                  data: base64Image.split(',')[1]
-                }
-              }
-            ]
-          }
-        ],
-        config: { responseMimeType: "application/json" }
-      });
 
-      const response = await model;
-      const result = JSON.parse(response.text);
+    const applyResult = (result: any) => {
       setAnalysis(result);
-      
       if (result.item) {
-        setStats(prev => prev.map(s => 
-          s.name.toLowerCase() === result.item.toLowerCase() 
-            ? { ...s, amount: s.amount + 5 } 
-            : s
-        ));
+        setStats(prev => {
+          const exists = prev.some(s => s.name.toLowerCase() === result.item.toLowerCase());
+          if (exists) {
+            return prev.map(s => 
+              s.name.toLowerCase() === result.item.toLowerCase() 
+                ? { ...s, amount: s.amount + 5 } : s
+            );
+          } else {
+            const colors = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
+            return [...prev, { name: result.item, amount: 5, color: colors[prev.length % colors.length] }];
+          }
+        });
       }
+    };
+
+    try {
+      const serverRes = await fetch('/api/ai/detect-food', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64Image })
+      });
+      if (serverRes.ok) {
+        const serverResult = await serverRes.json();
+        if (serverResult.success && serverResult.data) {
+          applyResult(serverResult.data);
+          return;
+        }
+      }
+      throw new Error("YOLO detection server unavailable");
     } catch (err) {
-      console.error("Analysis error:", err);
-      simulateVideoAnalysis();
+      console.error("YOLO detection failed:", err);
+      setError("Could not analyze image. Make sure the FastAPI backend is running (python backend/main.py).");
     } finally {
       setLoading(false);
     }
@@ -330,9 +312,29 @@ export default function WasteAnalysis() {
                 className="space-y-4"
               >
                 <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
-                  <p className="text-xs text-emerald-600 font-bold uppercase mb-1">Detected Most Wasted Item</p>
+                  <p className="text-xs text-emerald-600 font-bold uppercase mb-1">Primary Detection</p>
                   <h3 className="text-2xl font-bold text-emerald-900">{analysis.item}</h3>
+                  <div className="mt-2 bg-emerald-200/50 rounded-full h-2 overflow-hidden">
+                    <div className="bg-emerald-500 h-full rounded-full transition-all" style={{ width: `${analysis.confidence}%` }}></div>
+                  </div>
+                  <p className="text-[10px] text-emerald-600 mt-1">{analysis.confidence}% confidence</p>
                 </div>
+
+                {/* All detected items */}
+                {analysis.items && analysis.items.length > 1 && (
+                  <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 space-y-2">
+                    <p className="text-xs text-blue-600 font-bold uppercase mb-2">All Detected Items</p>
+                    {analysis.items.map((det: any, i: number) => (
+                      <div key={i} className="flex items-center gap-3">
+                        <span className="text-sm font-medium text-slate-700 w-24 truncate">{det.name}</span>
+                        <div className="flex-1 bg-blue-100 rounded-full h-2 overflow-hidden">
+                          <div className="bg-blue-500 h-full rounded-full" style={{ width: `${det.confidence}%` }}></div>
+                        </div>
+                        <span className="text-[10px] text-blue-600 font-bold w-10 text-right">{det.confidence}%</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
@@ -346,7 +348,7 @@ export default function WasteAnalysis() {
                 </div>
 
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                  <p className="text-[10px] text-slate-400 font-bold uppercase mb-1">Analysis Reason</p>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase mb-1">Visual Cues Used</p>
                   <p className="text-sm text-slate-600 leading-relaxed">{analysis.reason}</p>
                 </div>
 
@@ -468,3 +470,4 @@ function ActionCard({ icon, label, value, sub }: any) {
     </div>
   );
 }
+

@@ -122,17 +122,16 @@ export default function LoginPage() {
             <button
               type="button"
               onClick={async () => {
-                const guestUser = role === 'incharge' ? 'guest_incharge' : 'guest_student';
                 try {
                   const res = await fetch('/api/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username: guestUser, password: 'guest123', role })
+                    body: JSON.stringify({ username: 'guest_admin', password: 'guest123', role: 'incharge' })
                   });
                   if (res.ok) {
                     const data = await res.json();
                     login(data);
-                    navigate(data.role === 'incharge' ? '/incharge/dashboard' : '/student/home');
+                    navigate('/incharge/dashboard');
                   }
                 } catch (err) {
                   setError('Guest login failed');
@@ -140,7 +139,7 @@ export default function LoginPage() {
               }}
               className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
             >
-              <UserIcon size={20} /> Guest Login
+              <UserIcon size={20} /> Guest Login (Admin)
             </button>
           </form>
 
