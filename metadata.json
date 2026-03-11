@@ -1,0 +1,5 @@
+{
+  "name": "Hostel Food Waste Analytics",
+  "description": "AI-powered platform to track, analyze and reduce hostel food waste through student feedback and real-time analytics.",
+  "requestFramePermissions": ["camera", "microphone"]
+}
